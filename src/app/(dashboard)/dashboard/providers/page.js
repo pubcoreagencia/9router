@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import PropTypes from "prop-types";
 import {
   Card,
@@ -106,6 +106,7 @@ export default function ProvidersPage() {
     useState(false);
   const [testingMode, setTestingMode] = useState(null);
   const [testResults, setTestResults] = useState(null);
+  const [error, setError] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
   const notify = useNotificationStore();
   const searchQuery = useHeaderSearchStore((s) => s.query);
@@ -149,25 +150,47 @@ export default function ProvidersPage() {
       return (a.name || "").localeCompare(b.name || "");
     });
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [connectionsRes, nodesRes] = await Promise.all([
-          fetch("/api/providers"),
-          fetch("/api/provider-nodes"),
-        ]);
-        const connectionsData = await connectionsRes.json();
-        const nodesData = await nodesRes.json();
-        if (connectionsRes.ok)
-          setConnections(connectionsData.connections || []);
-        if (nodesRes.ok) setProviderNodes(nodesData.nodes || []);
-      } catch (error) {
-        console.log("Error fetching data:", error);
-      } finally {
-        setLoading(false);
+  const fetchProvidersWithRetry = useCallback(
+    async (maxRetries = 3, delay = 1000) => {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          setLoading(true);
+          setError(null);
+          const [connectionsRes, nodesRes] = await Promise.all([
+            fetch("/api/providers"),
+            fetch("/api/provider-nodes"),
+          ]);
+          const connectionsData = await connectionsRes.json();
+          const nodesData = await nodesRes.json();
+          if (connectionsRes.ok) {
+            setConnections(connectionsData.connections || []);
+          }
+          if (nodesRes.ok) {
+            setProviderNodes(nodesData.nodes || []);
+          }
+          // Success - exit retry loop
+          return;
+        } catch (err) {
+          console.error(`Attempt ${attempt + 1} failed:`, err);
+          if (attempt === maxRetries) {
+            // All retries exhausted
+            setError("Failed to load providers after multiple attempts");
+          } else {
+            // Wait before retry (exponential backoff)
+            await new Promise((resolve) =>
+              setTimeout(resolve, delay * Math.pow(2, attempt)),
+            );
+          }
+        } finally {
+          setLoading(false);
+        }
       }
-    };
-    fetchData();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    fetchProvidersWithRetry();
   }, []);
 
   const getProviderStats = (providerId, authType) => {
@@ -367,11 +390,35 @@ export default function ProvidersPage() {
       : apikeyEntries.slice(0, APIKEY_INITIAL_VISIBLE);
   const hiddenApikeyCount = apikeyEntries.length - APIKEY_INITIAL_VISIBLE;
 
-  if (loading) {
+  if (loading && connections.length === 0 && providerNodes.length === 0) {
     return (
       <div className="flex flex-col gap-8">
         <CardSkeleton />
         <CardSkeleton />
+      </div>
+    );
+  }
+
+  // Show error state only if we have no data and an error occurred
+  if (error && connections.length === 0 && providerNodes.length === 0) {
+    return (
+      <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
+        <div className="text-center py-8 border border-dashed border-border rounded-xl">
+          <span className="material-symbols-outlined text-[32px] text-red-500 mb-2">
+            error
+          </span>
+          <p className="text-text-muted text-sm">{error}</p>
+          <Button
+            onClick={() => {
+              setLoading(true);
+              setError(null);
+              fetchProvidersWithRetry();
+            }}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors sm:w-auto sm:py-1.5"
+          >
+            Tentar novamente
+          </Button>
+        </div>
       </div>
     );
   }
