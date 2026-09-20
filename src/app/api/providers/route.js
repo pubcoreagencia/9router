@@ -76,12 +76,12 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ connections: safeConnections });
-  } catch (error) {
-    console.log("Error fetching providers:", error);
-    return NextResponse.json({ error: "Failed to fetch providers" }, { status: 500 });
-  }
-}
+    return NextResponse.json({ connections: safeConnections }, { headers: { "Cache-Control": "no-store" } });
+      } catch (error) {
+        console.log("Error fetching providers:", error);
+        return NextResponse.json({ error: "Failed to fetch providers" }, { status: 500 });
+      }
+    }
 
 // POST /api/providers - Create new connection (API Key only, OAuth via separate flow)
 export async function POST(request) {

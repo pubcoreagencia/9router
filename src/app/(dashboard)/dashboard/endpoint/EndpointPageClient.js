@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import PropTypes from "prop-types";
 import { Card, Button, Input, Modal, CardSkeleton, Toggle, ConfirmModal } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { fetchJsonWithRetry } from "@/lib/frontend/fetchJsonWithRetry";
 import {
   TUNNEL_BENEFITS,
   TUNNEL_PING_INTERVAL_MS,
@@ -41,6 +42,8 @@ export default function APIPageClient({ machineId }) {
   const [tunnelStatus, setTunnelStatus] = useState(null);
   const [showEnableTunnelModal, setShowEnableTunnelModal] = useState(false);
   const [showDisableTunnelModal, setShowDisableTunnelModal] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // Tailscale state
   const [tsEnabled, setTsEnabled] = useState(false);
@@ -98,9 +101,9 @@ export default function APIPageClient({ machineId }) {
   }, [tsInstallLog]);
 
   useEffect(() => {
-    fetchData();
-    loadSettings();
-  }, []);
+      fetchData();
+      loadSettings();
+    }, [refreshKey]);
 
   // Status poll: only while degraded (not yet reachable). Stop once healthy to avoid spam.
   // Visibility re-check: refresh once when tab becomes visible.
@@ -193,38 +196,34 @@ export default function APIPageClient({ machineId }) {
 
   const loadSettings = async () => {
     setTunnelChecking(true);
-    try {
-      const [settingsRes, statusRes] = await Promise.all([
-        fetch("/api/settings"),
-        fetch("/api/tunnel/status", { cache: "no-store" })
-      ]);
-      if (settingsRes.ok) {
-        const data = await settingsRes.json();
-        setRequireApiKey(data.requireApiKey || false);
-        setRequireLogin(data.requireLogin !== false);
-        setHasPassword(data.hasPassword || false);
-        setTunnelDashboardAccess(data.tunnelDashboardAccess || false);
-      }
-      if (statusRes.ok) {
-        const data = await statusRes.json();
-        const tEnabled = data.tunnel?.settingsEnabled ?? data.tunnel?.enabled ?? false;
-        const tUrl = data.tunnel?.tunnelUrl || "";
-        setTunnelUrl(tUrl);
-        setTunnelPublicUrl(data.tunnel?.publicUrl || "");
-        setTunnelEnabled(tEnabled);
-        updateReachable(null, tunnelClientReachableRef, tunnelMissRef, setTunnelReachable, tunnelEverReachableRef, setTunnelEverReachable);
-
-        const tsEn = data.tailscale?.settingsEnabled ?? data.tailscale?.enabled ?? false;
-        const tsUrlVal = data.tailscale?.tunnelUrl || "";
-        setTsUrl(tsUrlVal);
-        setTsEnabled(tsEn);
-        updateReachable(null, tsClientReachableRef, tsMissRef, setTsReachable, tsEverReachableRef, setTsEverReachable);
-      }
-    } catch (error) {
-      console.log("Error loading settings:", error);
-    } finally {
-      setTunnelChecking(false);
+    setLoadError(null);
+    const [settingsRes, statusRes] = await Promise.all([
+      fetchJsonWithRetry("/api/settings"),
+      fetchJsonWithRetry("/api/tunnel/status"),
+    ]);
+    if (settingsRes.ok) {
+      const data = settingsRes.data || {};
+      setRequireApiKey(data.requireApiKey || false);
+      setRequireLogin(data.requireLogin !== false);
+      setHasPassword(data.hasPassword || false);
+      setTunnelDashboardAccess(data.tunnelDashboardAccess || false);
     }
+    if (statusRes.ok) {
+      const data = statusRes.data || {};
+      const tEnabled = data.tunnel?.settingsEnabled ?? data.tunnel?.enabled ?? false;
+      const tUrl = data.tunnel?.tunnelUrl || "";
+      setTunnelUrl(tUrl);
+      setTunnelPublicUrl(data.tunnel?.publicUrl || "");
+      setTunnelEnabled(tEnabled);
+      updateReachable(null, tunnelClientReachableRef, tunnelMissRef, setTunnelReachable, tunnelEverReachableRef, setTunnelEverReachable);
+
+      const tsEn = data.tailscale?.settingsEnabled ?? data.tailscale?.enabled ?? false;
+      const tsUrlVal = data.tailscale?.tunnelUrl || "";
+      setTsUrl(tsUrlVal);
+      setTsEnabled(tsEn);
+      updateReachable(null, tsClientReachableRef, tsMissRef, setTsReachable, tsEverReachableRef, setTsEverReachable);
+    }
+    setTunnelChecking(false);
   };
 
   const handleTunnelDashboardAccess = async (value) => {
@@ -254,32 +253,23 @@ export default function APIPageClient({ machineId }) {
   };
 
   const fetchData = async () => {
-    try {
-      const fetchKeys = async () => {
-        const res = await fetch("/api/keys");
-        if (!res.ok) return [];
-        const data = await res.json();
-        return data.keys || [];
-      };
+    const fetchKeys = async () => {
+      const res = await fetchJsonWithRetry("/api/keys");
+      if (!res.ok) return [];
+      return res.data?.keys || [];
+    };
 
-      let existing = await fetchKeys();
-      // Auto-provision a default key for first-time users so the endpoint works out of the box.
-      if (existing.length === 0) {
-        try {
-          const createRes = await fetch("/api/keys", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: "Default Key" }),
-          });
-          if (createRes.ok) existing = await fetchKeys();
-        } catch { /* fall through to empty render */ }
-      }
-      setKeys(existing);
-    } catch (error) {
-      console.log("Error fetching data:", error);
-    } finally {
-      setLoading(false);
+    let existing = await fetchKeys();
+    // Auto-provision a default key for first-time users so the endpoint works out of the box.
+    if (existing.length === 0) {
+      const createRes = await fetchJsonWithRetry("/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Default Key" }) });
+      if (createRes.ok) existing = await fetchKeys();
     }
+    if (existing.length === 0) {
+      setLoadError("Failed to load API keys after multiple attempts");
+    }
+    setKeys(existing);
+    setLoading(false);
   };
 
   // u2500u2500u2500 Cloudflare Tunnel handlers
@@ -710,6 +700,23 @@ export default function APIPageClient({ machineId }) {
       <div className="flex flex-col gap-8">
         <CardSkeleton />
         <CardSkeleton />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
+        <div className="text-center py-8 border border-dashed border-border rounded-xl">
+          <span className="material-symbols-outlined text-[32px] text-red-500 mb-2">error</span>
+          <p className="text-text-muted text-sm">{loadError}</p>
+          <button
+            onClick={() => { setLoadError(null); setRefreshKey((k) => k + 1); }}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:bg-border/40"
+          >
+            Tentar novamente
+          </button>
+        </div>
       </div>
     );
   }

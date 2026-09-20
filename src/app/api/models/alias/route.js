@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     const aliases = await getModelAliases();
-    return NextResponse.json({ aliases });
+    return NextResponse.json({ aliases }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.log("Error fetching aliases:", error);
     return NextResponse.json({ error: "Failed to fetch aliases" }, { status: 500 });

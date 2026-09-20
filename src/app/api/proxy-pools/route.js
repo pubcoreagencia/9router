@@ -56,7 +56,7 @@ export async function GET(request) {
     const proxyPools = await getProxyPools(filter);
 
     if (!includeUsage) {
-      return NextResponse.json({ proxyPools });
+      return NextResponse.json({ proxyPools }, { headers: { "Cache-Control": "no-store" } });
     }
 
     const connections = await getProviderConnections();
@@ -67,7 +67,7 @@ export async function GET(request) {
       boundConnectionCount: usageMap.get(pool.id) || 0,
     }));
 
-    return NextResponse.json({ proxyPools: enrichedProxyPools });
+    return NextResponse.json({ proxyPools: enrichedProxyPools }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.log("Error fetching proxy pools:", error);
     return NextResponse.json({ error: "Failed to fetch proxy pools" }, { status: 500 });

@@ -26,7 +26,9 @@ export default function ProfilePage() {
   const [shutdownOpen, setShutdownOpen] = useState(false);
   const [isShuttingDown, setIsShuttingDown] = useState(false);
   const [settings, setSettings] = useState({ fallbackStrategy: "fill-first" });
-  const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(null);
+    const [refreshKey, setRefreshKey] = useState(0);
   const [passwords, setPasswords] = useState({ current: "", new: "", confirm: "" });
   const [passStatus, setPassStatus] = useState({ type: "", message: "" });
   const [passLoading, setPassLoading] = useState(false);
@@ -88,7 +90,9 @@ export default function ProfilePage() {
   }, []);
 
   useEffect(() => {
-    fetch("/api/settings")
+    setLoading(true);
+    setLoadError(null);
+    fetch("/api/settings", { cache: "no-store" })
       .then((res) => res.json())
       .then((data) => {
         setSettings(data);
@@ -126,9 +130,11 @@ export default function ProfilePage() {
       })
       .catch((err) => {
         console.error("Failed to fetch settings:", err);
+        setLoadError("Failed to load settings after multiple attempts");
+        // Keep previous settings (never wipe a stale-but-valid config).
         setLoading(false);
       });
-  }, []);
+  }, [refreshKey]);
 
   const updateOutboundProxy = async (e) => {
     e.preventDefault();
@@ -765,6 +771,17 @@ export default function ProfilePage() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-0">
+      {loadError && (
+        <div className="mb-4 flex items-center justify-between gap-2 rounded-lg border border-dashed border-red-500/40 bg-red-500/5 px-3 py-2">
+          <p className="text-xs text-red-600 dark:text-red-400">{loadError}</p>
+          <button
+            onClick={() => { setLoadError(null); setRefreshKey((k) => k + 1); }}
+            className="shrink-0 rounded-md border px-2 py-1 text-xs font-medium transition-colors hover:bg-border/40"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      )}
       <div className="flex flex-col gap-6">
         {/* Local Mode Info */}
         <Card>

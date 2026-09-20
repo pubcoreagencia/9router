@@ -304,7 +304,9 @@ export default function BasicChatPageClient() {
       } catch (error) {
         if (!cancelled) {
           setLoadError(textValue(error?.message) || "Failed to load providers/models.");
-          setProviderGroups([]);
+          // Never wipe previously loaded providers on a transient failure
+          // (a failed refresh must not render as "no providers").
+          setProviderGroups((prev) => (prev && prev.length ? prev : []));
         }
       } finally {
         if (!cancelled) setLoadingData(false);

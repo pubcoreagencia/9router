@@ -6,6 +6,7 @@ import { useState, useEffect } from "react";
 import { Card, Badge, Button, AddCustomEmbeddingModal, NoAuthProxyCard, ProviderInfoCard } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import { MEDIA_PROVIDER_KINDS, AI_PROVIDERS, isCustomEmbeddingProvider } from "@/shared/constants/providers";
+import { fetchJsonWithRetry } from "@/lib/frontend/fetchJsonWithRetry";
 import ConnectionsCard from "@/app/(dashboard)/dashboard/providers/components/ConnectionsCard";
 import ModelsCard from "@/app/(dashboard)/dashboard/providers/components/ModelsCard";
 import { KIND_EXAMPLE_CONFIG } from "./components/exampleShared";
@@ -33,22 +34,29 @@ export default function MediaProviderDetailPage() {
 
   const [customNode, setCustomNode] = useState(null);
   const [customLoading, setCustomLoading] = useState(isCustom);
+  const [customLoadError, setCustomLoadError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [showEditModal, setShowEditModal] = useState(false);
 
   // Fetch custom node info from API for custom embedding nodes
   useEffect(() => {
     if (!isCustom) return;
     let cancelled = false;
-    fetch("/api/provider-nodes", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => {
-        if (cancelled) return;
-        setCustomNode((d.nodes || []).find((n) => n.id === id) || null);
-        setCustomLoading(false);
-      })
-      .catch(() => { if (!cancelled) setCustomLoading(false); });
+    (async () => {
+      setCustomLoading(true);
+      setCustomLoadError(null);
+      const res = await fetchJsonWithRetry("/api/provider-nodes");
+      if (cancelled) return;
+      if (res.ok) {
+        setCustomNode((res.data?.nodes || []).find((n) => n.id === id) || null);
+      } else {
+        // Distinguish "load failed" (transient) from "doesn't exist" (404).
+        setCustomLoadError("Failed to load provider after multiple attempts");
+      }
+      setCustomLoading(false);
+    })();
     return () => { cancelled = true; };
-  }, [id, isCustom]);
+  }, [id, isCustom, refreshKey]);
 
   if (!kindConfig) return notFound();
 
@@ -60,6 +68,22 @@ export default function MediaProviderDetailPage() {
     : builtInProvider;
 
   if (!isCustom && !builtInProvider) return notFound();
+  if (isCustom && customLoadError && !customNode) {
+    return (
+      <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0 py-8">
+        <div className="text-center py-8 border border-dashed border-border rounded-xl">
+          <span className="material-symbols-outlined text-[32px] text-red-500 mb-2">error</span>
+          <p className="text-text-muted text-sm">{customLoadError}</p>
+          <button
+            onClick={() => { setCustomLoadError(null); setRefreshKey((k) => k + 1); }}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:bg-border/40"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (isCustom && !customLoading && !customNode) return notFound();
   if (isCustom && customLoading) {
     return <div className="text-text-muted text-sm py-12 text-center">Loading...</div>;

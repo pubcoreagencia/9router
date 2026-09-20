@@ -11,6 +11,7 @@ import {
   ClineToolCard, KiloToolCard, DeepSeekTuiToolCard,
   JcodeToolCard, GrokBuildToolCard,
 } from "../components";
+import { fetchJsonWithRetry } from "@/lib/frontend/fetchJsonWithRetry";
 
 const CLOUD_URL = process.env.NEXT_PUBLIC_CLOUD_URL;
 
@@ -25,45 +26,44 @@ export default function ToolDetailClient({ toolId, machineId }) {
   const [tailscaleEnabled, setTailscaleEnabled] = useState(false);
   const [tailscaleUrl, setTailscaleUrl] = useState("");
   const [apiKeys, setApiKeys] = useState([]);
+  const [loadError, setLoadError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
-      try {
-        const [provRes, settingsRes, tunnelRes, keysRes] = await Promise.all([
-          fetch("/api/providers"),
-          fetch("/api/settings"),
-          fetch("/api/tunnel/status"),
-          fetch("/api/keys"),
-        ]);
-        if (!mounted) return;
-        if (provRes.ok) {
-          const data = await provRes.json();
-          setConnections(data.connections || []);
-        }
-        if (settingsRes.ok) {
-          const data = await settingsRes.json();
-          setCloudEnabled(data.cloudEnabled || false);
-        }
-        if (tunnelRes.ok) {
-          const data = await tunnelRes.json();
-          setTunnelEnabled(!!(data.tunnel?.enabled || data.tunnel?.settingsEnabled));
-          setTunnelPublicUrl(data.tunnel?.publicUrl || "");
-          setTailscaleEnabled(!!(data.tailscale?.enabled || data.tailscale?.settingsEnabled));
-          setTailscaleUrl(data.tailscale?.tunnelUrl || "");
-        }
-        if (keysRes.ok) {
-          const data = await keysRes.json();
-          setApiKeys(data.keys || []);
-        }
-      } catch (error) {
-        console.log("Error loading tool data:", error);
-      } finally {
-        if (mounted) setLoading(false);
+      setLoading(true);
+      setLoadError(null);
+      const [provRes, settingsRes, tunnelRes, keysRes] = await Promise.all([
+        fetchJsonWithRetry("/api/providers"),
+        fetchJsonWithRetry("/api/settings"),
+        fetchJsonWithRetry("/api/tunnel/status"),
+        fetchJsonWithRetry("/api/keys"),
+      ]);
+      if (!mounted) return;
+      if (provRes.ok) {
+        setConnections(provRes.data?.connections || []);
       }
+      if (settingsRes.ok) {
+        setCloudEnabled(settingsRes.data?.cloudEnabled || false);
+      }
+      if (tunnelRes.ok) {
+        const data = tunnelRes.data || {};
+        setTunnelEnabled(!!(data.tunnel?.enabled || data.tunnel?.settingsEnabled));
+        setTunnelPublicUrl(data.tunnel?.publicUrl || "");
+        setTailscaleEnabled(!!(data.tailscale?.enabled || data.tailscale?.settingsEnabled));
+        setTailscaleUrl(data.tailscale?.tunnelUrl || "");
+      }
+      if (keysRes.ok) {
+        setApiKeys(keysRes.data?.keys || []);
+      }
+      if (!provRes.ok && !settingsRes.ok && !keysRes.ok) {
+        setLoadError("Failed to load tool data after multiple attempts");
+      }
+      if (mounted) setLoading(false);
     })();
     return () => { mounted = false; };
-  }, []);
+  }, [refreshKey]);
 
   const getActiveProviders = () => connections.filter(c => c.isActive !== false);
 
@@ -194,7 +194,18 @@ export default function ToolDetailClient({ toolId, machineId }) {
         <h1 className="text-xl font-semibold text-text-main sm:text-2xl">{tool.name}</h1>
         <p className="text-sm text-text-muted">{tool.description}</p>
       </div>
-      {loading ? <CardSkeleton /> : renderToolCard()}
+      {loadError && connections.length === 0 ? (
+        <div className="text-center py-8 border border-dashed border-border rounded-xl">
+          <span className="material-symbols-outlined text-[32px] text-red-500 mb-2">error</span>
+          <p className="text-text-muted text-sm">{loadError}</p>
+          <button
+            onClick={() => { setLoadError(null); setRefreshKey((k) => k + 1); }}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:bg-border/40"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      ) : loading ? <CardSkeleton /> : renderToolCard()}
     </div>
   );
 }

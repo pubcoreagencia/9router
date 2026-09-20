@@ -9,7 +9,7 @@ import { getDefaultPricing } from "open-sse/providers/pricing.js";
 export async function GET() {
   try {
     const pricing = await getPricing();
-    return NextResponse.json(pricing);
+    return NextResponse.json(pricing, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Error fetching pricing:", error);
     return NextResponse.json(
@@ -106,7 +106,7 @@ export async function DELETE(request) {
     }
 
     const pricing = await getPricing();
-    return NextResponse.json(pricing);
+    return NextResponse.json(pricing, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Error resetting pricing:", error);
     return NextResponse.json(

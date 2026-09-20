@@ -13,6 +13,7 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { translate } from "@/i18n/runtime";
 import { fetchSuggestedModels } from "@/shared/utils/providerModelsFetcher";
+import { fetchJsonWithRetry } from "@/lib/frontend/fetchJsonWithRetry";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
 import ModelRow from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
@@ -41,8 +42,10 @@ export default function ProviderDetailPage() {
   const providerId = params.id;
   const { getCaps } = useModelCaps();
   const [connections, setConnections] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [providerNode, setProviderNode] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(null);
+    const [refreshKey, setRefreshKey] = useState(0);
+    const [providerNode, setProviderNode] = useState(null);
   const [proxyPools, setProxyPools] = useState([]);
   const [showOAuthModal, setShowOAuthModal] = useState(false);
   const [showXiaomiMimoModal, setShowXiaomiMimoModal] = useState(false);
@@ -302,57 +305,57 @@ export default function ProviderDetailPage() {
   }, [providerId]);
 
   const fetchConnections = useCallback(async () => {
-    try {
-      const [connectionsRes, nodesRes, proxyPoolsRes, settingsRes] = await Promise.all([
-        fetch("/api/providers", { cache: "no-store" }),
-        fetch("/api/provider-nodes", { cache: "no-store" }),
-        fetch("/api/proxy-pools?isActive=true", { cache: "no-store" }),
-        fetch("/api/settings", { cache: "no-store" }),
-      ]);
-      const connectionsData = await connectionsRes.json();
-      const nodesData = await nodesRes.json();
-      const proxyPoolsData = await proxyPoolsRes.json();
-      const settingsData = settingsRes.ok ? await settingsRes.json() : {};
-      if (connectionsRes.ok) {
-        const filtered = (connectionsData.connections || []).filter(c => c.provider === providerId);
-        setConnections(filtered);
-      }
-      if (proxyPoolsRes.ok) {
-        setProxyPools(proxyPoolsData.proxyPools || []);
-      }
-      // Load per-provider strategy override
+    setLoading(true);
+    setLoadError(null);
+    const [connectionsRes, nodesRes, proxyPoolsRes, settingsRes] = await Promise.all([
+      fetchJsonWithRetry("/api/providers"),
+      fetchJsonWithRetry("/api/provider-nodes"),
+      fetchJsonWithRetry("/api/proxy-pools?isActive=true"),
+      fetchJsonWithRetry("/api/settings"),
+    ]);
+
+    if (connectionsRes.ok) {
+      const filtered = (connectionsRes.data?.connections || []).filter(c => c.provider === providerId);
+      setConnections(filtered);
+    }
+    if (proxyPoolsRes.ok) {
+      setProxyPools(proxyPoolsRes.data?.proxyPools || []);
+    }
+    // Only write settings-derived config when settings actually loaded, so a
+    // transient settings failure never wipes provider strategy/thinking/autoping.
+    if (settingsRes.ok) {
+      const settingsData = settingsRes.data || {};
       const override = (settingsData.providerStrategies || {})[providerId] || {};
       setProviderStrategy(override.fallbackStrategy || null);
       setProviderStickyLimit(override.stickyRoundRobinLimit != null ? String(override.stickyRoundRobinLimit) : "1");
-      // Load per-provider thinking config
       const thinkingCfg = (settingsData.providerThinking || {})[providerId] || {};
       setThinkingMode(thinkingCfg.mode || "auto");
       const autoPingSettingsKey = AUTO_PING_SETTINGS_KEYS[providerId];
       const apCfg = autoPingSettingsKey ? settingsData[autoPingSettingsKey] || {} : {};
       setAutoPing({ enabled: apCfg.enabled === true, connections: apCfg.connections || {} });
-      if (nodesRes.ok) {
-        let node = (nodesData.nodes || []).find((entry) => entry.id === providerId) || null;
-
-        // Newly created compatible nodes can be briefly unavailable on one worker.
-        // Retry a few times before showing "Provider not found".
-        if (!node && isCompatible) {
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            await new Promise((resolve) => setTimeout(resolve, 150));
-            const retryRes = await fetch("/api/provider-nodes", { cache: "no-store" });
-            if (!retryRes.ok) continue;
-            const retryData = await retryRes.json();
-            node = (retryData.nodes || []).find((entry) => entry.id === providerId) || null;
-            if (node) break;
-          }
-        }
-
-        setProviderNode(node);
-      }
-    } catch (error) {
-      console.log("Error fetching connections:", error);
-    } finally {
-      setLoading(false);
     }
+    if (nodesRes.ok) {
+      let node = (nodesRes.data?.nodes || []).find((entry) => entry.id === providerId) || null;
+
+      // Newly created compatible nodes can be briefly unavailable on one worker.
+      // Retry a few times before showing "Provider not found".
+      if (!node && isCompatible) {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          const retryRes = await fetchJsonWithRetry("/api/provider-nodes");
+          if (!retryRes.ok) continue;
+          node = (retryRes.data?.nodes || []).find((entry) => entry.id === providerId) || null;
+          if (node) break;
+        }
+      }
+
+      setProviderNode(node);
+    }
+
+    if (!connectionsRes.ok && !settingsRes.ok && !nodesRes.ok && !proxyPoolsRes.ok) {
+      setLoadError("Failed to load provider after multiple attempts");
+    }
+    setLoading(false);
   }, [providerId, isCompatible]);
 
   const handleUpdateNode = async (formData) => {
@@ -467,7 +470,7 @@ export default function ProviderDetailPage() {
     fetchAliases();
     fetchCustomModels();
     fetchDisabledModels();
-  }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels]);
+  }, [fetchConnections, fetchAliases, fetchCustomModels, fetchDisabledModels, refreshKey]);
 
   // Live per-connection catalogs (cursor, zed): the static registry carries
   // no usable list, so resolve from the active connection. Fires only when
@@ -1329,14 +1332,31 @@ export default function ProviderDetailPage() {
     );
   };
 
-  if (loading) {
+  if (loading && connections.length === 0 && !providerNode) {
     return (
       <div className="flex flex-col gap-8">
         <CardSkeleton />
         <CardSkeleton />
       </div>
     );
-}
+  }
+
+  if (loadError && connections.length === 0 && !providerNode) {
+    return (
+      <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
+        <div className="text-center py-8 border border-dashed border-border rounded-xl">
+          <span className="material-symbols-outlined text-[32px] text-red-500 mb-2">error</span>
+          <p className="text-text-muted text-sm">{loadError}</p>
+          <button
+            onClick={() => { setLoadError(null); setRefreshKey((k) => k + 1); }}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:bg-border/40"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!providerInfo) {
     return (

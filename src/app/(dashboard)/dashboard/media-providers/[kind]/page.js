@@ -2,10 +2,11 @@
 
 import { useParams, notFound, useRouter } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Card, Badge, Button, Toggle, AddCustomEmbeddingModal } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import { MEDIA_PROVIDER_KINDS, AI_PROVIDERS, getProvidersByKind } from "@/shared/constants/providers";
+import { fetchJsonWithRetry } from "@/lib/frontend/fetchJsonWithRetry";
 
 // Kinds that support combos (currently disabled for image/tts — temporarily hidden).
 // webSearch/webFetch handled by /web page.
@@ -144,6 +145,9 @@ export default function MediaProviderKindPage() {
   const [customNodes, setCustomNodes] = useState([]);
   const [combos, setCombos] = useState([]);
   const [showAddCustomEmbedding, setShowAddCustomEmbedding] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   // webSearch/webFetch listing pages are merged into /web
   useEffect(() => {
@@ -158,25 +162,57 @@ export default function MediaProviderKindPage() {
 
   useEffect(() => {
     if (!kindConfig) return;
-    fetch("/api/providers", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((d) => setConnections(d.connections || []))
-      .catch(() => {});
-    if (isEmbedding) {
-      fetch("/api/provider-nodes", { cache: "no-store" })
-        .then((r) => r.json())
-        .then((d) => setCustomNodes((d.nodes || []).filter((n) => n.type === "custom-embedding")))
-        .catch(() => {});
-    }
-    if (supportsCombo) {
-      fetch("/api/combos", { cache: "no-store" })
-        .then((r) => r.json())
-        .then((d) => setCombos(d.combos || []))
-        .catch(() => {});
-    }
-  }, [isEmbedding, supportsCombo, kindConfig]);
+    (async () => {
+      setLoading(true);
+      setError(null);
+      const [prov, nodes, comboRes] = await Promise.all([
+        fetchJsonWithRetry("/api/providers"),
+        isEmbedding ? fetchJsonWithRetry("/api/provider-nodes") : Promise.resolve({ ok: true, data: { nodes: [] } }),
+        supportsCombo ? fetchJsonWithRetry("/api/combos") : Promise.resolve({ ok: true, data: { combos: [] } }),
+      ]);
+      // Apply best-effort per-collection; a failure must not wipe other data
+      // nor be interpreted as "no providers exist".
+      if (prov.ok) setConnections(prov.data?.connections || []);
+      if (nodes.ok && isEmbedding) setCustomNodes((nodes.data?.nodes || []).filter((n) => n.type === "custom-embedding"));
+      if (comboRes.ok && supportsCombo) setCombos(comboRes.data?.combos || []);
+      if (!prov.ok && !nodes.ok && !comboRes.ok) {
+        setError("Failed to load providers after multiple attempts");
+      }
+      setLoading(false);
+    })();
+  }, [isEmbedding, supportsCombo, kindConfig, refreshKey]);
 
   if (!kindConfig) return notFound();
+
+  // Don't render "No providers" while loading or after a transient failure.
+  if (loading && connections.length === 0 && customNodes.length === 0) {
+    return (
+      <div className="flex flex-col gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-40 animate-pulse rounded-xl bg-border/40" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (error && connections.length === 0 && customNodes.length === 0) {
+    return (
+      <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
+        <div className="text-center py-8 border border-dashed border-border rounded-xl">
+          <span className="material-symbols-outlined text-[32px] text-red-500 mb-2">error</span>
+          <p className="text-text-muted text-sm">{error}</p>
+          <button
+            onClick={() => { setLoading(true); setError(null); setRefreshKey((k) => k + 1); }}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:bg-border/40"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const providers = getProvidersByKind(kind);
   const kindCombos = combos.filter((c) => c.kind === kind);

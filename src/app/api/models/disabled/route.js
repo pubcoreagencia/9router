@@ -9,8 +9,8 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const providerAlias = searchParams.get("providerAlias");
     const all = await getDisabledModels();
-    if (providerAlias) return NextResponse.json({ ids: all[providerAlias] || [] });
-    return NextResponse.json({ disabled: all });
+    if (providerAlias) return NextResponse.json({ ids: all[providerAlias] || [] }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({ disabled: all }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.log("Error fetching disabled models:", error);
     return NextResponse.json({ error: "Failed to fetch disabled models" }, { status: 500 });

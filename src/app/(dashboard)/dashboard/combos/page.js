@@ -9,6 +9,7 @@ import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModa
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/shared/constants/providers";
+import { fetchJsonWithRetry } from "@/lib/frontend/fetchJsonWithRetry";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -55,27 +56,27 @@ export default function CombosPage() {
   const { getCaps } = useModelCaps();
   const [confirmState, setConfirmState] = useState(null);
   const { copied, copy } = useCopyToClipboard();
+  const [loadError, setLoadError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  useEffect(() => {
-    fetchData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const [combosRes, providersRes, settingsRes] = await Promise.all([
+      fetchJsonWithRetry("/api/combos"),
+      fetchJsonWithRetry("/api/providers"),
+      fetchJsonWithRetry("/api/settings"),
+    ]);
 
-  const fetchData = async () => {
-    try {
-      const [combosRes, providersRes, settingsRes] = await Promise.all([
-        fetch("/api/combos"),
-        fetch("/api/providers"),
-        fetch("/api/settings"),
-      ]);
-      const combosData = await combosRes.json();
-      const providersData = await providersRes.json();
-      const settingsData = settingsRes.ok ? await settingsRes.json() : {};
-      
-      // Only LLM combos here - webSearch/webFetch combos belong to media-providers/web
-      if (combosRes.ok) setCombos((combosData.combos || []).filter(c => !c.kind || c.kind === "llm"));
-      if (providersRes.ok) {
-        setActiveProviders(providersData.connections || []);
-      }
+    // Only LLM combos here - webSearch/webFetch combos belong to media-providers/web
+    if (combosRes.ok) setCombos((combosRes.data?.combos || []).filter(c => !c.kind || c.kind === "llm"));
+    if (providersRes.ok) {
+      setActiveProviders(providersRes.data?.connections || []);
+    }
+    // Only write settings-derived state when settings actually loaded. NEVER
+    // overwrite comboStrategies/capacityAdapter with {} on a transient failure.
+    if (settingsRes.ok) {
+      const settingsData = settingsRes.data || {};
       setComboStrategies(settingsData.comboStrategies || {});
       const rawAdapter = settingsData.capacityAdapter || {};
       const normalized = {};
@@ -83,12 +84,16 @@ export default function CombosPage() {
         normalized[cap.key] = normalizeCapEntry(rawAdapter[cap.key]);
       }
       setCapacityAdapter(normalized);
-    } catch (error) {
-      console.log("Error fetching data:", error);
-    } finally {
-      setLoading(false);
     }
-  };
+    if (!combosRes.ok && !providersRes.ok && !settingsRes.ok) {
+      setLoadError("Failed to load combos after multiple attempts");
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSetCapacityAdapter = async (next) => {
     setCapacityAdapter(next);
@@ -184,11 +189,28 @@ export default function CombosPage() {
     }
   };
 
-  if (loading) {
+  if (loading && combos.length === 0 && Object.keys(comboStrategies).length === 0) {
     return (
       <div className="flex flex-col gap-6">
         <CardSkeleton />
         <CardSkeleton />
+      </div>
+    );
+  }
+
+  if (loadError && combos.length === 0) {
+    return (
+      <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
+        <div className="text-center py-8 border border-dashed border-border rounded-xl">
+          <span className="material-symbols-outlined text-[32px] text-red-500 mb-2">error</span>
+          <p className="text-text-muted text-sm">{loadError}</p>
+          <button
+            onClick={() => { setLoadError(null); setRefreshKey((k) => k + 1); }}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:bg-border/40"
+          >
+            Tentar novamente
+          </button>
+        </div>
       </div>
     );
   }

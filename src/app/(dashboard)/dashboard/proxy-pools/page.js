@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Badge, Button, Card, CardSkeleton, Input, Modal, Toggle, ConfirmModal } from "@/shared/components";
 import { useNotificationStore } from "@/store/notificationStore";
+import { fetchJsonWithRetry } from "@/lib/frontend/fetchJsonWithRetry";
 
 function getStatusVariant(status) {
   if (status === "active") return "success";
@@ -53,6 +54,8 @@ export default function ProxyPoolsPage() {
   const [confirmState, setConfirmState] = useState(null);
   const relayMenuRef = useRef(null);
   const notify = useNotificationStore();
+  const [error, setError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -67,22 +70,20 @@ export default function ProxyPoolsPage() {
   }, [showRelayMenu]);
 
   const fetchProxyPools = useCallback(async () => {
-    try {
-      const res = await fetch("/api/proxy-pools?includeUsage=true", { cache: "no-store" });
-      const data = await res.json();
-      if (res.ok) {
-        setProxyPools(data.proxyPools || []);
-      }
-    } catch (error) {
-      console.log("Error fetching proxy pools:", error);
-    } finally {
-      setLoading(false);
+    setLoading(true);
+    setError(null);
+    const res = await fetchJsonWithRetry("/api/proxy-pools?includeUsage=true");
+    if (res.ok) {
+      setProxyPools(res.data?.proxyPools || []);
+    } else if (proxyPools.length === 0) {
+      setError("Failed to load proxy pools after multiple attempts");
     }
+    setLoading(false);
   }, []);
 
   useEffect(() => {
     fetchProxyPools();
-  }, [fetchProxyPools]);
+  }, [fetchProxyPools, refreshKey]);
 
   const resetForm = () => {
     setEditingProxyPool(null);
@@ -563,11 +564,28 @@ export default function ProxyPoolsPage() {
     [proxyPools]
   );
 
-  if (loading) {
+  if (loading && proxyPools.length === 0) {
     return (
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-1 sm:gap-6 sm:px-0">
         <CardSkeleton />
         <CardSkeleton />
+      </div>
+    );
+  }
+
+  if (error && proxyPools.length === 0) {
+    return (
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-1 sm:gap-6 sm:px-0">
+        <div className="text-center py-8 border border-dashed border-border rounded-xl">
+          <span className="material-symbols-outlined text-[32px] text-red-500 mb-2">error</span>
+          <p className="text-text-muted text-sm">{error}</p>
+          <button
+            onClick={() => { setError(null); setRefreshKey((k) => k + 1); }}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:bg-border/40"
+          >
+            Tentar novamente
+          </button>
+        </div>
       </div>
     );
   }

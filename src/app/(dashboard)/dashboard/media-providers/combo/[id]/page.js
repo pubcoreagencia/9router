@@ -1,11 +1,12 @@
 "use client";
 
 import { useParams, notFound, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { Card, Button, Input, Toggle, ModelSelectModal } from "@/shared/components";
 import ProviderIcon from "@/shared/components/ProviderIcon";
 import { AI_PROVIDERS, MEDIA_PROVIDER_KINDS } from "@/shared/constants/providers";
+import { fetchJsonWithRetry } from "@/lib/frontend/fetchJsonWithRetry";
 
 // Parse "providerId/model" or just "providerId" → { providerId, model }
 function parseModelEntry(entry) {
@@ -61,38 +62,52 @@ export default function ComboDetailPage() {
   const [apiKey, setApiKey] = useState("");
   const [connections, setConnections] = useState([]);
   const [modelAliases, setModelAliases] = useState({});
+  const [loadError, setLoadError] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  const fetchAll = async () => {
-    try {
-      const [comboRes, settingsRes, logsRes, keysRes, connsRes, aliasesRes] = await Promise.all([
-        fetch(`/api/combos/${id}`, { cache: "no-store" }),
-        fetch("/api/settings", { cache: "no-store" }),
-        fetch("/api/usage/logs", { cache: "no-store" }),
-        fetch("/api/keys", { cache: "no-store" }),
-        fetch("/api/providers", { cache: "no-store" }),
-        fetch("/api/models/alias", { cache: "no-store" }),
-      ]);
-      if (aliasesRes.ok) setModelAliases((await aliasesRes.json()).aliases || {});
-      if (keysRes.ok) {
-        const k = await keysRes.json();
-        setApiKey((k.keys || []).find((x) => x.isActive !== false)?.key || "");
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const [comboRes, settingsRes, logsRes, keysRes, connsRes, aliasesRes] = await Promise.all([
+      fetchJsonWithRetry(`/api/combos/${id}`),
+      fetchJsonWithRetry("/api/settings"),
+      fetchJsonWithRetry("/api/usage/logs"),
+      fetchJsonWithRetry("/api/keys"),
+      fetchJsonWithRetry("/api/providers"),
+      fetchJsonWithRetry("/api/models/alias"),
+    ]);
+
+    // Per-resource best effort: a failure in one resource must NOT abort the
+    // hydration of the others, and never reads as "combo not found".
+    if (aliasesRes.ok) setModelAliases(aliasesRes.data?.aliases || {});
+    if (keysRes.ok) {
+      const k = keysRes.data || {};
+      setApiKey((k.keys || []).find((x) => x.isActive !== false)?.key || "");
+    }
+    if (connsRes.ok) setConnections(connsRes.data?.connections || []);
+
+    // Combo itself failed to load (network/5xx): distinguish from a real 404.
+    if (!comboRes.ok) {
+      if (comboRes.status === 404) {
+        setLoading(false);
+        return; // notFound() below renders the legit "does not exist"
       }
-      if (connsRes.ok) setConnections((await connsRes.json()).connections || []);
-      if (!comboRes.ok) { setCombo(null); setLoading(false); return; }
-      const c = await comboRes.json();
-      setCombo(c);
-      setName(c.name);
-      setProviders(c.models || []);
-      const s = settingsRes.ok ? await settingsRes.json() : {};
-      setRoundRobin(s.comboStrategies?.[c.name]?.fallbackStrategy === "round-robin");
-      const allLogs = logsRes.ok ? await logsRes.json() : [];
-      setLogs(allLogs.filter((l) => typeof l === "string" && l.includes(c.name)).slice(0, 50));
-    } catch { /* noop */ }
+      setLoading(false);
+      setLoadError("Failed to load combo after multiple attempts");
+      return;
+    }
+    const c = comboRes.data;
+    setCombo(c);
+    setName(c.name);
+    setProviders(c.models || []);
+    const s = settingsRes.ok ? settingsRes.data : {};
+    setRoundRobin(s.comboStrategies?.[c.name]?.fallbackStrategy === "round-robin");
+    const allLogs = logsRes.ok && Array.isArray(logsRes.data) ? logsRes.data : [];
+    setLogs(allLogs.filter((l) => typeof l === "string" && l.includes(c.name)).slice(0, 50));
     setLoading(false);
-  };
+  }, [id]);
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { fetchAll(); }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { fetchAll(); }, [id, fetchAll, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const validateName = (v) => {
     if (!v.trim()) { setNameError("Name is required"); return false; }
@@ -229,6 +244,22 @@ export default function ComboDetailPage() {
   }
 
   if (loading) return <div className="text-text-muted text-sm">Loading...</div>;
+  if (loadError && !combo) {
+    return (
+      <div className="flex min-w-0 flex-col gap-6 px-1 sm:px-0">
+        <div className="text-center py-8 border border-dashed border-border rounded-xl">
+          <span className="material-symbols-outlined text-[32px] text-red-500 mb-2">error</span>
+          <p className="text-text-muted text-sm">{loadError}</p>
+          <button
+            onClick={() => { setLoadError(null); setRefreshKey((k) => k + 1); }}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors hover:bg-border/40"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!combo) return notFound();
 
   const kindLabel = KIND_LABELS[combo.kind] || MEDIA_PROVIDER_KINDS.find((k) => k.id === combo.kind)?.label || "Combo";
