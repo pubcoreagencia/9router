@@ -11,6 +11,20 @@ let selectionMutex = Promise.resolve();
 
 const GITHUB_MONTHLY_USAGE_LIMIT = "you've reached your additional usage limit for your plan";
 
+const TOOL_SCHEMA_ERROR_PATTERNS = [
+  /tool(?:s|_calls?| choice)?[^\n]{0,120}(?:unsupported|not supported|invalid|reject|schema|payload)/i,
+  /(?:unsupported|invalid|reject|does not support|not supported)[^\n]{0,120}(?:tool|function|schema|payload)/i,
+  /(?:request|input)[^\n]{0,80}(?:schema|payload)[^\n]{0,80}(?:invalid|unsupported|reject)/i,
+  /provider rejected (?:the )?(?:request )?(?:schema|tool payload)/i,
+  /function[_ -]?calling[^\n]{0,100}(?:unsupported|not supported|invalid|reject)/i,
+];
+
+function isSchemaOrToolError(status, errorText) {
+  if (Number(status) !== 400) return false;
+  const text = String(errorText || "");
+  return TOOL_SCHEMA_ERROR_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 function githubMonthlyResetMs(status, errorText, provider) {
   if (resolveProviderId(provider) !== "github" || Number(status) !== 402) return null;
   if (!String(errorText || "").toLowerCase().includes(GITHUB_MONTHLY_USAGE_LIMIT)) return null;
@@ -251,6 +265,13 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
     shouldFallback = true;
     cooldownMs = githubResetAtMs - Date.now();
     newBackoffLevel = 0;
+  } else if (isSchemaOrToolError(status, errorText)) {
+    // A 400 caused by unsupported tools/schema is a candidate incompatibility,
+    // not a client/auth failure. Lock only this account+model briefly so the
+    // existing rotation/fallback machinery can select another candidate.
+    shouldFallback = true;
+    cooldownMs = 60 * 1000;
+    newBackoffLevel = backoffLevel;
   } else if (resetsAtMs && resetsAtMs > Date.now()) {
     shouldFallback = true;
     // Antigravity quota API provides exact per-model resetAt. Do not truncate it.
