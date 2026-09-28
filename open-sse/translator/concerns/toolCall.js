@@ -23,7 +23,35 @@ function sanitizeToolId(id) {
   return sanitized.length > 0 ? sanitized : null;
 }
 
-// Ensure all tool_calls have valid id field and arguments is string (some providers require it)
+/**
+ * Normalize OpenAI-compatible tool-call arguments to a valid JSON object string.
+ *
+ * Historical assistant tool calls are sent back upstream on the next model turn.
+ * A truncated provider response can leave function.arguments as invalid JSON;
+ * strict providers (notably Nvidia) reject the entire request before they can
+ * recover. Preserve valid object arguments, stringify object values, and use
+ * an empty object for malformed/non-object values.
+ */
+export function normalizeToolCallArguments(argumentsValue) {
+  if (argumentsValue && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
+    return JSON.stringify(argumentsValue);
+  }
+
+  if (typeof argumentsValue === "string" && argumentsValue.trim()) {
+    try {
+      const parsed = JSON.parse(argumentsValue);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return JSON.stringify(parsed);
+      }
+    } catch {
+      // Malformed or truncated JSON. Fall through to a valid object string.
+    }
+  }
+
+  return "{}";
+}
+
+// Ensure all tool_calls have valid id field and arguments is a valid JSON object string.
 export function ensureToolCallIds(body) {
   if (!body.messages || !Array.isArray(body.messages)) return body;
 
@@ -40,9 +68,8 @@ export function ensureToolCallIds(body) {
         if (!tc.type) {
           tc.type = "function";
         }
-        // Ensure arguments is JSON string, not object
-        if (tc.function?.arguments && typeof tc.function.arguments !== "string") {
-          tc.function.arguments = JSON.stringify(tc.function.arguments);
+        if (tc.function) {
+          tc.function.arguments = normalizeToolCallArguments(tc.function.arguments);
         }
       }
     }
