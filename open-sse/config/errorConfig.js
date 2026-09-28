@@ -62,6 +62,8 @@ export const ERROR_RULES = [
   { text: "request not allowed",      cooldownMs: COOLDOWN.short },
   { text: "model is unavailable",      cooldownMs: COOLDOWN.short },
   { text: "model unavailable",          cooldownMs: COOLDOWN.short },
+  { text: "resourceexhausted",            cooldownMs: COOLDOWN.short },
+  { text: "total request limit reached",  cooldownMs: COOLDOWN.short },
   { text: "improperly formed request", cooldownMs: COOLDOWN.long },
   { text: "rate limit",               backoff: true },
   { text: "too many requests",        backoff: true },
