@@ -366,6 +366,19 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   }
 
   // Execute request
+  // Bound each upstream model attempt so a slow provider cannot hold a PUB Combo
+  // request for the full client timeout. The combo can advance on HTTP 504.
+  const providerTimeoutMs = Math.max(1000, Number(process.env.ROUTER_PROVIDER_TIMEOUT_MS ?? 120000));
+  const providerController = new AbortController();
+  let providerTimedOut = false;
+  const onClientAbort = () => { if (!providerController.signal.aborted) providerController.abort(); };
+  if (streamController.signal.aborted) onClientAbort();
+  else streamController.signal.addEventListener('abort', onClientAbort, { once: true });
+  const providerTimer = setTimeout(() => {
+    providerTimedOut = true;
+    if (!providerController.signal.aborted) providerController.abort(new Error('ROUTER_PROVIDER_TIMEOUT'));
+  }, providerTimeoutMs);
+
   let providerResponse, providerUrl, providerHeaders, finalBody;
   // Most executors return their registry format. Cursor AgentService is an
   // exception: it is decoded by the executor into OpenAI-compatible output.
@@ -378,7 +391,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       credentials,
       providerSessionId: sessionSeed,
       clientTool,
-      signal: streamController.signal,
+      signal: providerController.signal,
       log,
       proxyOptions,
     });
@@ -392,7 +405,18 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       toolNameMap = new Map([...(toolNameMap || []), ...renamedToolNames]);
     }
     reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
+    clearTimeout(providerTimer);
+    streamController.signal.removeEventListener('abort', onClientAbort);
   } catch (error) {
+    clearTimeout(providerTimer);
+    streamController.signal.removeEventListener('abort', onClientAbort);
+    if (providerTimedOut) {
+      trackPendingRequest(model, provider, connectionId, false, true);
+      appendRequestLog({ model, provider, connectionId, status: `FAILED ${HTTP_STATUS.GATEWAY_TIMEOUT}` }).catch(() => { });
+      const timeoutMessage = 'Upstream provider timed out after ' + providerTimeoutMs + 'ms';
+      if (log?.errorLine) log.errorLine(reqTag, '✗', `ERROR 504 · ${provider}/${model} · ${Date.now() - requestStartTime}ms\n    ${timeoutMessage}`);
+      return createErrorResult(HTTP_STATUS.GATEWAY_TIMEOUT, timeoutMessage);
+    }
     trackPendingRequest(model, provider, connectionId, false, true);
     appendRequestLog({ model, provider, connectionId, status: `FAILED ${error.name === "AbortError" ? 499 : HTTP_STATUS.BAD_GATEWAY}` }).catch(() => { });
     saveRequestDetail(buildRequestDetail({
