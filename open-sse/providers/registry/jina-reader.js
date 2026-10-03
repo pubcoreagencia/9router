@@ -16,6 +16,7 @@ export default {
   serviceKinds: [
     "webFetch"
   ],
+  noAuth: true,
   fetchConfig: {
     baseUrl: "https://r.jina.ai",
     method: "GET",
