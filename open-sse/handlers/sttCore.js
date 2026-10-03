@@ -136,6 +136,26 @@ async function transcribeHuggingFace(cfg, file, model, token) {
   return jsonResponse({ text: data.text || "" });
 }
 
+// Cloudflare Workers AI: POST raw audio buffer to {baseUrl}/{accountId}/ai/run/{model}
+async function transcribeCloudflareAi(cfg, file, model, token, credentials) {
+  const accountId = credentials?.providerSpecificData?.accountId;
+  if (!accountId) return createErrorResult(400, "cloudflare-ai requires accountId in providerSpecificData");
+  const url = `${cfg.baseUrl.replace(/\/+$/, "")}/${accountId}/ai/run/${model}`;
+  const buf = await file.arrayBuffer();
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": resolveAudioContentType(file),
+    },
+    body: buf,
+  });
+  if (!res.ok) return upstreamError(res);
+  const data = await res.json();
+  const text = data?.result?.text ?? data?.text ?? "";
+  return jsonResponse({ text });
+}
+
 // Default: OpenAI/Groq/Whisper-compatible multipart
 async function transcribeOpenAICompatible(cfg, file, model, token, formData) {
   const fd = new FormData();
@@ -193,6 +213,7 @@ export async function handleSttCore({ provider, model, formData, credentials, st
       case "nvidia-asr":      return await transcribeNvidia(cfg, file, model, token);
       case "huggingface-asr": return await transcribeHuggingFace(cfg, file, model, token);
       case "gemini-stt":      return await transcribeGemini(cfg, file, model, token, formData);
+      case "cloudflare-ai":   return await transcribeCloudflareAi(cfg, file, model, token, credentials);
       default:                return await transcribeOpenAICompatible(cfg, file, model, token, formData);
     }
   } catch (err) {
