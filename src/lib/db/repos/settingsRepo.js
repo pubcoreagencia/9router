@@ -16,7 +16,14 @@ const DEFAULT_SETTINGS = {
   quotaVisibility: {},
   comboStrategy: "fallback",
   comboStickyRoundRobinLimit: 1,
-  comboStrategies: {},
+  comboStrategies: {
+    // Hierarchical autorouter over free OpenRouter LLMs (best → weakest).
+    // Seeds via migration #002; users can override per-combo in the dashboard.
+    "fullstack-free": {
+      fallbackStrategy: "fallback",
+      roundRobinStickyLimit: 1,
+    },
+  },
   capacityAdapter: {
     vision: { enabled: true, roundRobin: false, models: [] },
     pdf: { enabled: false, roundRobin: false, models: [] },

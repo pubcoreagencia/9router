@@ -26,6 +26,23 @@ export default {
     },
   },
   models: [
+    // Free LLMs — hierarchical autorouting tier (best → weakest), see combo "fullstack-free"
+    { id: "nvidia/nemotron-3.5-super-vl:free", name: "NVIDIA Nemotron 3.5 Super VL (Free)" },
+    { id: "thinkingmachines/inkling:free", name: "Thinking Machines: Inkling (Free)" },
+    { id: "nvidia/nemotron-3-ultra-550b-a55b:free", name: "NVIDIA Nemotron 3 Ultra (Free)" },
+    { id: "google/gemma-4-31b-it:free", name: "Google Gemma 4 31B (Free)" },
+    { id: "nvidia/nemotron-3-super-120b-a12b:free", name: "NVIDIA Nemotron 3 Super (Free)" },
+    { id: "poolside/laguna-s-2.1:free", name: "Poolside Laguna S 2.1 (Free)" },
+    { id: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", name: "NVIDIA Nemotron 3 Nano Omni (Free)" },
+    { id: "google/gemma-4-26b-a4b-it:free", name: "Google Gemma 4 26B A4B (Free)" },
+    { id: "nvidia/nemotron-3.5-lightning:free", name: "NVIDIA Nemotron 3.5 Lightning (Free)" },
+    { id: "poolside/laguna-xs-2.1:free", name: "Poolside Laguna XS 2.1 (Free)" },
+    { id: "xingchen-agi/xing4.0-29b-a4b:free", name: "XingChen Xing4.0 29B (Free)" },
+    { id: "recursive/flint-v1.0:free", name: "Recursive Flint v1.0 (Free)" },
+    { id: "dots-studio/dots-3-note-preview:free", name: "Dots Studio Dots3-Note Preview (Free)" },
+    { id: "thinkingmachines/inkling-small:free", name: "Thinking Machines: Inkling Small (Free)" },
+    { id: "cohere/north-mini-code:free", name: "Cohere North Mini Code (Free)" },
+    // Embeddings / TTS / Image / Video
     { id: "openai/text-embedding-3-large", name: "OpenAI Text Embedding 3 Large", kind: "embedding" },
     { id: "openai/text-embedding-3-small", name: "OpenAI Text Embedding 3 Small", kind: "embedding" },
     { id: "openai/text-embedding-ada-002", name: "OpenAI Text Embedding Ada 002", kind: "embedding" },
