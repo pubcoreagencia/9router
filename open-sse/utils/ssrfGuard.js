@@ -63,10 +63,28 @@ export function isPrivateIPv6(ip) {
   const normalized = ip.toLowerCase();
   if (normalized === "::1" || normalized === "::") return true;
 
-  // IPv4-mapped IPv6: ::ffff:192.168.1.1
-  const ipv4Mapped = normalized.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (ipv4Mapped) {
-    return isPrivateIPv4(ipv4Mapped[1]);
+  // IPv4-mapped hex format: ::ffff:7f00:1 or IPv4-compatible hex: ::7f00:1
+  const hexMapped = normalized.match(/^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (hexMapped) {
+    const p1 = parseInt(hexMapped[1], 16);
+    const p2 = parseInt(hexMapped[2], 16);
+    const ip4 = [(p1 >> 8) & 0xff, p1 & 0xff, (p2 >> 8) & 0xff, p2 & 0xff].join(".");
+    return isPrivateIPv4(ip4);
+  }
+
+  // IPv4-mapped dotted decimal: ::ffff:192.168.1.1
+  const dottedMapped = normalized.match(/::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/);
+  if (dottedMapped) {
+    return isPrivateIPv4(dottedMapped[1]);
+  }
+
+  // Deprecated 6to4 (2002::/16) embedding private IPv4
+  const sixToFour = normalized.match(/^2002:([0-9a-f]{1,4}):([0-9a-f]{1,4})/i);
+  if (sixToFour) {
+    const p1 = parseInt(sixToFour[1], 16);
+    const p2 = parseInt(sixToFour[2], 16);
+    const ip4 = [(p1 >> 8) & 0xff, p1 & 0xff, (p2 >> 8) & 0xff, p2 & 0xff].join(".");
+    return isPrivateIPv4(ip4);
   }
 
   // Unique local addresses (fc00::/7) or Link-local (fe80::/10)

@@ -31,9 +31,14 @@ test("SSRF Guard: isPrivateIPv6 correctly classifies addresses", () => {
   assert.equal(isPrivateIPv6("fd12:3456:789a::1"), true);
   assert.equal(isPrivateIPv6("fe80::1"), true);
   assert.equal(isPrivateIPv6("::ffff:192.168.1.1"), true);
+  assert.equal(isPrivateIPv6("::ffff:7f00:1"), true); // IPv4-mapped hex loopback
+  assert.equal(isPrivateIPv6("::ffff:c0a8:101"), true); // IPv4-mapped hex 192.168.1.1
+  assert.equal(isPrivateIPv6("::7f00:1"), true); // IPv4-compatible hex loopback
+  assert.equal(isPrivateIPv6("2002:7f00:1::"), true); // 6to4 embedded loopback
 
   // Public IPv6
   assert.equal(isPrivateIPv6("2001:4860:4860::8888"), false);
+  assert.equal(isPrivateIPv6("2606:4700:4700::1111"), false);
 });
 
 test("SSRF Guard: assertSafeFetchUrl rejects dangerous protocols and internal destinations", () => {
@@ -50,6 +55,14 @@ test("SSRF Guard: assertSafeFetchUrl rejects dangerous protocols and internal de
   assert.throws(() => assertSafeFetchUrl("http://192.168.0.1/admin"), /SSRF Blocked/);
   assert.throws(() => assertSafeFetchUrl("http://server.local"), /SSRF Blocked/);
   assert.throws(() => assertSafeFetchUrl("http://db.internal"), /SSRF Blocked/);
+
+  // Evasion vectors: IPv4-mapped IPv6, octal, hex notation
+  assert.throws(() => assertSafeFetchUrl("http://[::ffff:127.0.0.1]/status"), /SSRF Blocked/);
+  assert.throws(() => assertSafeFetchUrl("http://[::ffff:7f00:1]/status"), /SSRF Blocked/);
+  assert.throws(() => assertSafeFetchUrl("http://[::7f00:1]/status"), /SSRF Blocked/);
+  assert.throws(() => assertSafeFetchUrl("http://0177.0.0.1/status"), /SSRF Blocked/);
+  assert.throws(() => assertSafeFetchUrl("http://0x7f000001/status"), /SSRF Blocked/);
+  assert.throws(() => assertSafeFetchUrl("http://2130706433/status"), /SSRF Blocked/);
 
   // Valid public URLs pass
   assert.doesNotThrow(() => assertSafeFetchUrl("https://example.com/article"));
