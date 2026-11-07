@@ -1,6 +1,8 @@
 // Web Fetch handler — dispatches to firecrawl, jina-reader, tavily, exa, ollama
 // Returns normalized shape across all providers
 
+import { assertSafeFetchUrl } from "../../utils/ssrfGuard.js";
+
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_FORMAT = "markdown";
 
@@ -93,6 +95,11 @@ async function readJsonOrText(res) {
 export async function handleFetchCore({ url, format, maxCharacters, provider, providerConfig, credentials, log }) {
   if (!url || typeof url !== "string") {
     return { success: false, status: 400, error: "url is required" };
+  }
+  try {
+    assertSafeFetchUrl(url);
+  } catch (err) {
+    return { success: false, status: 400, error: err.message };
   }
   if (!provider) {
     return { success: false, status: 400, error: "provider is required" };
